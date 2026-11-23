@@ -1,0 +1,703 @@
+
+<!DOCTYPE html>
+<html lang="fa" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#111827">
+<title>MultiChain Wallet</title>
+
+<style>
+body {
+  margin:0;
+  padding:18px;
+  background:#111827;
+  color:white;
+  font-family:-apple-system,sans-serif;
+}
+h2 {text-align:center}
+.card {
+  background:#1f2937;
+  padding:16px;
+  border-radius:14px;
+  margin:14px 0;
+}
+button {
+  width:100%;
+  padding:15px;
+  margin:7px 0;
+  border:0;
+  border-radius:10px;
+  background:#2563eb;
+  color:white;
+  font-size:16px;
+}
+button:disabled {opacity:.5}
+.address {
+  direction:ltr;
+  text-align:left;
+  word-break:break-all;
+  color:#93c5fd;
+  font-size:13px;
+  user-select:all;
+}
+.label {color:#9ca3af;font-size:13px}
+#phrase {
+  direction:ltr;
+  text-align:left;
+  line-height:2;
+  word-break:break-word;
+  color:#fbbf24;
+  user-select:all;
+}
+#status {color:#93c5fd;text-align:center}
+.warning {color:#fca5a5;font-size:12px}
+.network {
+  border-top:1px solid #374151;
+  padding-top:10px;
+  margin-top:10px;
+}
+.small {font-size:12px;color:#9ca3af}
+textarea {
+  box-sizing:border-box;
+  width:100%;
+  min-height:100px;
+  padding:12px;
+  border-radius:10px;
+  border:1px solid #4b5563;
+  background:#111827;
+  color:#fbbf24;
+  direction:ltr;
+  text-align:left;
+  font-size:16px;
+  line-height:1.8;
+  resize:vertical;
+}
+</style>
+</head>
+
+<body>
+
+<h2>MultiChain Wallet</h2>
+
+<div class="card">
+  <button id="generate">تولید کیف پول جدید</button>
+  <p id="status">آماده تولید کیف پول</p>
+</div>
+
+<div class="card">
+  <h3>عبارت بازیابی BIP39</h3>
+  <div id="phrase">هنوز تولید نشده است</div>
+  <button id="copyPhrase">کپی عبارت بازیابی</button>
+</div>
+
+<div class="card">
+  <h3>بازیابی کیف پول</h3>
+  <p class="small">
+    عبارت بازیابی ۱۲ کلمه‌ای انگلیسی را با فاصله وارد کن.
+    عبارت فقط در همین صفحه پردازش می‌شود.
+  </p>
+  <textarea
+    id="recoveryInput"
+    placeholder="word1 word2 word3 ..."
+    autocomplete="off"
+    autocorrect="off"
+    autocapitalize="none"
+    spellcheck="false"
+  ></textarea>
+  <button id="restore">اعتبارسنجی و بازیابی کیف پول</button>
+</div>
+
+<div class="card">
+  <h3>آدرس‌های دریافت</h3>
+  <div id="addresses">هنوز آدرسی تولید نشده است</div>
+  <button id="copyAddresses">کپی همه آدرس‌ها</button>
+</div>
+
+<div class="card">
+  <p class="warning">
+    این نسخه آزمایشی است و ممیزی امنیتی نشده.
+    برای نگهداری یا انتقال سرمایه واقعی استفاده نکن.
+    عبارت بازیابی و کلید خصوصی را با هیچ‌کس به اشتراک نگذار.
+  </p>
+  <p class="small">
+    موجودی، تاریخچه، امضا و ارسال تراکنش هنوز پیاده‌سازی نشده‌اند.
+    بازیابی فعلی با عبارت BIP39 و passphrase خالی انجام می‌شود.
+  </p>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/ethers@6.17.0/dist/ethers.umd.min.js"></script>
+
+<script type="module">
+
+import { HDKey } from 'https://esm.sh/@scure/bip32@2.2.0';
+
+import {
+  mnemonicToSeed,
+  generateMnemonic,
+  validateMnemonic
+} from 'https://esm.sh/@scure/bip39@2.2.0';
+
+import {
+  wordlist
+} from 'https://esm.sh/@scure/bip39@2.2.0/wordlists/english.js';
+
+import {
+  base58,
+  bech32
+} from 'https://esm.sh/@scure/base@2.0.0';
+
+import {
+  sha256
+} from 'https://esm.sh/@noble/hashes@2.2.0/sha2.js';
+
+import {
+  ripemd160
+} from 'https://esm.sh/@noble/hashes@2.2.0/legacy.js';
+
+import {
+  keccak_256
+} from 'https://esm.sh/@noble/hashes@2.2.0/sha3.js';
+
+import {
+  secp256k1
+} from 'https://esm.sh/@noble/curves@2.2.0/secp256k1.js';
+
+import {
+  ed25519
+} from 'https://esm.sh/@noble/curves@2.2.0/ed25519.js';
+
+
+const $ = id => document.getElementById(id);
+
+let currentPhrase = '';
+let currentAddresses = {};
+let lastGeneratedAddresses = null;
+
+
+const concat = (...arrays) => {
+  const out = new Uint8Array(
+    arrays.reduce((n, a) => n + a.length, 0)
+  );
+
+  let offset = 0;
+
+  for (const a of arrays) {
+    out.set(a, offset);
+    offset += a.length;
+  }
+
+  return out;
+};
+
+
+const hash160 = bytes =>
+  ripemd160(sha256(bytes));
+
+
+function base58check(payload) {
+  const checksum = sha256(sha256(payload));
+
+  return base58.encode(
+    concat(payload, checksum.slice(0, 4))
+  );
+}
+
+
+function child(seed, path) {
+  const root = HDKey.fromMasterSeed(seed);
+  const node = root.derive(path);
+
+  if (!node.privateKey) {
+    throw Error('کلید مشتق‌شده در دسترس نیست: ' + path);
+  }
+
+  return node;
+}
+
+
+function secpPublic(privateKey, compressed = true) {
+  return secp256k1.getPublicKey(
+    privateKey,
+    compressed
+  );
+}
+
+
+function btcAddress(publicKey) {
+  const hash = hash160(publicKey);
+
+  return bech32.encode(
+    'bc',
+    [0, ...bech32.toWords(hash)]
+  );
+}
+
+
+function p2pkh(publicKey, version) {
+  return base58check(
+    concat(
+      new Uint8Array([version]),
+      hash160(publicKey)
+    )
+  );
+}
+
+
+function tronAddress(publicKey) {
+  const body = keccak_256(
+    publicKey.slice(1)
+  ).slice(-20);
+
+  return base58check(
+    concat(
+      new Uint8Array([0x41]),
+      body
+    )
+  );
+}
+
+
+async function hmacSha512(key, data) {
+  const imported = await crypto.subtle.importKey(
+    'raw',
+    key,
+    {
+      name:'HMAC',
+      hash:'SHA-512'
+    },
+    false,
+    ['sign']
+  );
+
+  return new Uint8Array(
+    await crypto.subtle.sign(
+      'HMAC',
+      imported,
+      data
+    )
+  );
+}
+
+
+async function solanaSeedFromBip39(
+  seed,
+  path = "m/44'/501'/0'/0'"
+) {
+  let I = await hmacSha512(
+    new TextEncoder().encode('ed25519 seed'),
+    seed
+  );
+
+  let key = I.slice(0, 32);
+  let chain = I.slice(32);
+
+  const parts = path.split('/').slice(1);
+
+  for (const part of parts) {
+    const hardened = part.endsWith("'");
+
+    if (!hardened) {
+      throw Error('مسیر سولانا باید hardened باشد');
+    }
+
+    const index = Number(part.slice(0, -1));
+
+    if (
+      !Number.isInteger(index) ||
+      index < 0 ||
+      index >= 0x80000000
+    ) {
+      throw Error('مسیر سولانا نامعتبر است');
+    }
+
+    const idx = index + 0x80000000;
+
+    const data = concat(
+      new Uint8Array([0]),
+      key,
+      new Uint8Array([
+        idx >>> 24,
+        (idx >>> 16) & 255,
+        (idx >>> 8) & 255,
+        idx & 255
+      ])
+    );
+
+    I = await hmacSha512(chain, data);
+
+    key = I.slice(0, 32);
+    chain = I.slice(32);
+  }
+
+  return key;
+}
+
+
+async function deriveAll(phrase) {
+  if (!validateMnemonic(phrase, wordlist)) {
+    throw Error('عبارت بازیابی BIP39 معتبر نیست');
+  }
+
+  const seed = await mnemonicToSeed(phrase);
+  const out = {};
+
+  try {
+
+    if (!window.ethers) {
+      throw Error('کتابخانه EVM بارگذاری نشده است');
+    }
+
+    const evm = ethers.HDNodeWallet.fromPhrase(
+      phrase,
+      '',
+      "m/44'/60'/0'/0/0"
+    );
+
+    for (const network of [
+      'Ethereum',
+      'BNB Smart Chain',
+      'Polygon',
+      'Arbitrum',
+      'Optimism',
+      'Avalanche C-Chain'
+    ]) {
+      out[network] = {
+        address:evm.address,
+        path:"m/44'/60'/0'/0/0",
+        note:'آدرس مشترک خانواده EVM'
+      };
+    }
+
+
+    const btc = child(
+      seed,
+      "m/84'/0'/0'/0/0"
+    );
+
+    out['Bitcoin (BTC)'] = {
+      address:btcAddress(
+        secpPublic(btc.privateKey, true)
+      ),
+      path:"m/84'/0'/0'/0/0",
+      note:'Native SegWit'
+    };
+
+
+    const ltc = child(
+      seed,
+      "m/44'/2'/0'/0/0"
+    );
+
+    out['Litecoin (LTC)'] = {
+      address:p2pkh(
+        secpPublic(ltc.privateKey, true),
+        0x30
+      ),
+      path:"m/44'/2'/0'/0/0",
+      note:'Legacy P2PKH'
+    };
+
+
+    const doge = child(
+      seed,
+      "m/44'/3'/0'/0/0"
+    );
+
+    out['Dogecoin (DOGE)'] = {
+      address:p2pkh(
+        secpPublic(doge.privateKey, true),
+        0x1e
+      ),
+      path:"m/44'/3'/0'/0/0",
+      note:'Legacy P2PKH'
+    };
+
+
+    const tron = child(
+      seed,
+      "m/44'/195'/0'/0/0"
+    );
+
+    out['TRON (TRX)'] = {
+      address:tronAddress(
+        secpPublic(tron.privateKey, false)
+      ),
+      path:"m/44'/195'/0'/0/0",
+      note:'Base58Check'
+    };
+
+
+    const solSeed = await solanaSeedFromBip39(seed);
+
+    try {
+      const solPublic = ed25519.getPublicKey(solSeed);
+
+      out['Solana (SOL)'] = {
+        address:base58.encode(solPublic),
+        path:"m/44'/501'/0'/0'",
+        note:'Ed25519 / SLIP-0010'
+      };
+
+    } finally {
+      solSeed.fill(0);
+    }
+
+    return out;
+
+  } finally {
+    seed.fill(0);
+  }
+}
+
+
+function render(addresses) {
+  $('addresses').replaceChildren();
+
+  for (const [name, data] of Object.entries(addresses)) {
+    const box = document.createElement('div');
+    box.className = 'network';
+
+    const title = document.createElement('strong');
+    title.textContent = name;
+
+    const path = document.createElement('div');
+    path.className = 'label';
+    path.textContent = 'مسیر: ' + data.path;
+
+    const address = document.createElement('div');
+    address.className = 'address';
+    address.textContent = data.address;
+
+    const note = document.createElement('div');
+    note.className = 'small';
+    note.textContent = data.note;
+
+    box.append(
+      title,
+      path,
+      address,
+      note
+    );
+
+    $('addresses').append(box);
+  }
+}
+
+
+function normalizePhrase(input) {
+  return input
+    .normalize('NFKD')
+    .trim()
+    .toLowerCase()
+    .split(/\s+/)
+    .join(' ');
+}
+
+
+function compareAddresses(first, second) {
+  const names = Object.keys(first);
+
+  if (names.length !== Object.keys(second).length) {
+    return false;
+  }
+
+  return names.every(
+    name =>
+      second[name] &&
+      first[name].address === second[name].address
+  );
+}
+
+
+async function processWallet(phrase, mode) {
+
+  const generateButton = $('generate');
+  const restoreButton = $('restore');
+
+  generateButton.disabled = true;
+  restoreButton.disabled = true;
+
+  try {
+
+    $('status').textContent =
+      mode === 'restore'
+        ? 'در حال بررسی عبارت و بازیابی...'
+        : 'در حال تولید کیف پول...';
+
+    if (
+      !crypto ||
+      typeof crypto.getRandomValues !== 'function'
+    ) {
+      throw Error('مولد تصادفی امن در دسترس نیست');
+    }
+
+    const normalized = normalizePhrase(phrase);
+    const words = normalized.split(' ');
+
+    if (words.length !== 12) {
+      throw Error('عبارت باید دقیقاً ۱۲ کلمه داشته باشد');
+    }
+
+    if (!validateMnemonic(normalized, wordlist)) {
+      throw Error(
+        'عبارت BIP39 معتبر نیست؛ کلمات و ترتیب آن‌ها را بررسی کن'
+      );
+    }
+
+    const addresses = await deriveAll(normalized);
+
+    let comparison = null;
+
+    if (mode === 'restore' && lastGeneratedAddresses) {
+      comparison = compareAddresses(
+        lastGeneratedAddresses,
+        addresses
+      );
+    }
+
+    currentPhrase = normalized;
+    currentAddresses = addresses;
+
+    if (mode === 'generate') {
+      lastGeneratedAddresses = JSON.parse(
+        JSON.stringify(addresses)
+      );
+
+      $('phrase').textContent = normalized;
+
+      $('status').textContent =
+        'کیف پول جدید ساخته شد؛ ۱۱ شبکه مشتق شدند.';
+    } else {
+
+      $('phrase').textContent =
+        'عبارت بازیابی با موفقیت اعتبارسنجی شد.';
+
+      $('recoveryInput').value = '';
+
+      if (comparison === true) {
+        $('status').textContent =
+          'بازیابی موفق؛ تمام آدرس‌ها دقیقاً با کیف پول قبلی یکسان هستند.';
+      } else if (comparison === false) {
+        $('status').textContent =
+          'بازیابی انجام شد، اما آدرس‌ها با نمونه قبلی یکسان نیستند.';
+      } else {
+        $('status').textContent =
+          'بازیابی موفق؛ برای مقایسه، آدرس‌ها را با نسخه قبلی بررسی کن.';
+      }
+    }
+
+    render(addresses);
+
+  } catch (error) {
+
+    $('status').textContent =
+      'خطا: ' + (error?.message || String(error));
+
+  } finally {
+
+    generateButton.disabled = false;
+    restoreButton.disabled = false;
+  }
+}
+
+
+$('generate').addEventListener('click', async () => {
+
+  try {
+
+    const phrase = generateMnemonic(wordlist, 128);
+
+    await processWallet(
+      phrase,
+      'generate'
+    );
+
+  } catch (error) {
+
+    $('status').textContent =
+      'خطا: ' + (error?.message || String(error));
+  }
+
+});
+
+
+$('restore').addEventListener('click', async () => {
+
+  const phrase = $('recoveryInput').value;
+
+  if (!phrase.trim()) {
+    $('status').textContent =
+      'ابتدا عبارت ۱۲ کلمه‌ای را وارد کن';
+    return;
+  }
+
+  await processWallet(
+    phrase,
+    'restore'
+  );
+
+});
+
+
+$('copyPhrase').addEventListener('click', async () => {
+
+  if (!currentPhrase) {
+    $('status').textContent =
+      'ابتدا کیف پول بساز یا بازیابی کن';
+    return;
+  }
+
+  try {
+
+    await navigator.clipboard.writeText(
+      currentPhrase
+    );
+
+    $('status').textContent =
+      'عبارت بازیابی کپی شد';
+
+  } catch {
+
+    $('status').textContent =
+      'کپی خودکار ناموفق بود';
+  }
+
+});
+
+
+$('copyAddresses').addEventListener('click', async () => {
+
+  if (!Object.keys(currentAddresses).length) {
+    $('status').textContent =
+      'ابتدا کیف پول بساز یا بازیابی کن';
+    return;
+  }
+
+  const text = Object.entries(currentAddresses)
+    .map(([name, data]) =>
+      name + '\n' +
+      data.address + '\n' +
+      data.path
+    )
+    .join('\n\n');
+
+  try {
+
+    await navigator.clipboard.writeText(text);
+
+    $('status').textContent =
+      'آدرس‌ها کپی شدند';
+
+  } catch {
+
+    $('status').textContent =
+      'کپی آدرس‌ها ناموفق بود';
+  }
+
+});
+
+</script>
+</body>
+</html>
+
